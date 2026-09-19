@@ -41,16 +41,37 @@ export interface LyricsData {
 
 export type MusicAction = 'play' | 'pause' | 'next' | 'prev' | 'volume';
 
-export type BridgeStatus =
+export type BridgeStatus = 'notDetected' | 'needsRestart' | 'installed' | 'connecting' | 'connected';
+
+/** 酷狗接入状态：不注入进程，状态来自系统媒体会话与宿主检测 */
+/** 酷狗接入状态：未开增强时来自系统媒体会话，增强模式下来自 libcef 补丁与 CDP */
+export type KugouStatus =
   | 'notDetected'
+  | 'notRunning'
+  | 'needsSystemControls'
+  | 'needsPatch'
   | 'needsRestart'
-  | 'installed'
   | 'connecting'
   | 'connected';
+
+/** 酷狗进程内增强：libcef.dll 的补丁状态与 CDP 连接情况 */
+export interface KugouEnhanceStatus {
+  /** missing | unsupported | pending | patched */
+  patch: 'missing' | 'unsupported' | 'pending' | 'patched';
+  /** CDP 端口已在应答（= 补丁生效且酷狗在跑） */
+  cdp: boolean;
+  kugouRunning: boolean;
+  /** 补丁已就位但酷狗还跑着旧 DLL，需要重启它 */
+  needsRestart: boolean;
+}
 
 export interface MusicConfig {
   /** 网易云进程内增强，默认开启 */
   neteaseBridge: boolean;
+  /** 酷狗音乐接入：设置页只有「酷狗音乐」一个开关，打开时连同 kugouEnhance 一起打开 */
+  kugouSupport: boolean;
+  /** 酷狗进程内增强（给 libcef.dll 打补丁 + 一次管理员授权）。由「酷狗音乐」开关联动，不单独暴露 */
+  kugouEnhance: boolean;
 }
 
 /** 可单独停用的后台子系统（故障排查用：逐个关闭定位鼠标卡顿等问题的来源） */
@@ -227,6 +248,10 @@ export const IpcChannels = {
   musicSeek: 'music:seek',
   musicArtwork: 'music:artwork',
   musicLyrics: 'music:lyrics',
+  musicKugouStatus: 'music:kugou-status',
+  musicKugouEnhanceStatus: 'music:kugou-enhance-status',
+  musicKugouRepair: 'music:kugou-repair',
+  musicKugouRevert: 'music:kugou-revert',
   weatherIpCity: 'weather:ip-city',
   weatherGeocode: 'weather:geocode',
   weatherQuery: 'weather:query',
@@ -320,6 +345,14 @@ export interface IslandApi {
   /** 按 lyricsId 取当前曲目歌词；id 不匹配（已切歌）时返回 null */
   musicLyrics(id: string): Promise<LyricsData | null>;
   musicBridgeStatus(): Promise<BridgeStatus>;
+  /** 酷狗接入状态（设置页展示；会话/进程/安装三层判定） */
+  musicKugouStatus(): Promise<KugouStatus>;
+  /** 酷狗增强的详细状态（补丁态 + CDP 是否就绪），设置页据此显示「修复」/「还原」 */
+  musicKugouEnhanceStatus(): Promise<KugouEnhanceStatus>;
+  /** 打补丁打开酷狗的 DevTools 端口：弹一次 UAC 并重启酷狗 */
+  musicKugouRepair(): Promise<string>;
+  /** 还原酷狗的 libcef.dll：弹一次 UAC 并重启酷狗 */
+  musicKugouRevert(): Promise<string>;
   weatherIpCity(): Promise<IpCityInfo>;
   weatherGeocode(city: string, lang: string): Promise<GeocodeResult>;
   weatherQuery(lat: number, lon: number, opts?: WeatherQueryOptions): Promise<WeatherResult>;

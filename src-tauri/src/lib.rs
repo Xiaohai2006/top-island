@@ -9,6 +9,17 @@ use tauri::{AppHandle, Emitter, Manager};
 use island_core::AppSettings;
 use island_windows::{InputHandlers, Rect};
 
+/// 提权 helper：被 `ShellExecuteW("runas")` 拉起时只干写盘这一件事（打补丁 / 还原），跑完即退出。
+/// 必须在 Tauri 初始化之前拦下（此时进程带管理员令牌，绝不能起界面或加载配置）。
+pub fn run_kugou_patch_helper_if_requested() -> Option<i32> {
+    let args: Vec<String> = std::env::args().collect();
+    let pos = args.iter().position(|a| a == services::music::KUGOU_HELPER_FLAG)?;
+    let mode = args.get(pos + 1).map(String::as_str).unwrap_or("patch");
+    let libcef = args.get(pos + 2).map(String::as_str).unwrap_or("");
+    let control = args.get(pos + 3).map(String::as_str).unwrap_or("");
+    Some(services::music::run_kugou_patch_helper(mode, libcef, control))
+}
+
 fn init_input(app: &AppHandle) {
     let Some(win) = app.get_webview_window("island") else { return };
     let (Ok(pos), Ok(size), Ok(dpi)) =
@@ -103,6 +114,10 @@ pub fn run() {
             ipc::music::music_artwork,
             ipc::music::music_lyrics,
             ipc::music::music_bridge_status,
+            ipc::music::music_kugou_status,
+            ipc::music::music_kugou_enhance_status,
+            ipc::music::music_kugou_repair,
+            ipc::music::music_kugou_revert,
             ipc::notify::notify_activate_toast,
             ipc::notify::notify_image,
             ipc::clipboard::clipboard_read_text,

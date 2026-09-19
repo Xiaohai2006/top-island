@@ -164,6 +164,26 @@ const enUS: Messages = {
   settingsMusicHint:
     'Connect NetEase CloudMusic for progress, lyrics, cover art and playback controls. This loads a component inside the player. Other players are not affected.',
   musicNeteaseLabel: 'NetEase CloudMusic',
+  settingsKugouHint:
+    'Connect KuGou Music for progress, lyrics, cover art and playback controls. Turning it on automatically patches a KuGou component once (administrator approval; KuGou restarts) for millisecond-accurate progress; turning it off asks for approval again and restores the original file.',
+  musicKugouLabel: 'KuGou Music',
+  kugouUnsupportedFallback:
+    'This KuGou version is not recognized, so the patch was skipped and the system media session is used instead.',
+  kugouStatusNotDetected: 'KuGou not detected',
+  kugouStatusNotRunning: 'KuGou is not running',
+  kugouStatusNeedsSystemControls: 'Enable system playback controls in KuGou',
+  kugouStatusNeedsPatch: 'Needs a one-time authorized repair',
+  kugouStatusNeedsRestart: 'Restart KuGou Music',
+  kugouStatusConnecting: 'Connecting…',
+  kugouStatusUnsupported: 'This version is not supported yet',
+  kugouRetryBtn: 'Retry enhancement',
+  kugouRepairBusyBtn: 'Working…',
+  kugouRepairBusy: 'Requesting administrator rights — click Yes in the prompt…',
+  kugouRepairOk: 'Enhancement applied; progress and lyrics now track in milliseconds.',
+  kugouRevertBusy:
+    'Requesting administrator rights to restore KuGou\u2019s original file — click Yes in the prompt…',
+  kugouRevertOk: 'KuGou\u2019s libcef.dll restored.',
+  kugouStatusConnected: 'Connected',
   musicStatusLabel: 'Connection status',
   bridgeStatusNotDetected: 'CloudMusic not detected',
   bridgeStatusNeedsRestart: 'Restart CloudMusic',

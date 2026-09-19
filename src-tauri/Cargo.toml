@@ -24,6 +24,8 @@ thiserror = "2"
 ureq = { version = "3", features = ["json"] }
 tungstenite = "0.30"
 winreg = "0.52"
+# 解酷狗本地 .krc 歌词（XOR + zlib）；crate 已在依赖树里（ureq/png 传递依赖），不新增第三方代码
+flate2 = "1"
 windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_Globalization",
@@ -33,6 +35,8 @@ windows = { version = "0.58", features = [
     "Win32_System_Registry",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
 ] }
 tauri-plugin-updater = "2.11.0"
 

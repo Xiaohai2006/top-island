@@ -3,8 +3,7 @@ use island_core::{LyricsData, MusicAction, MusicArtwork, MusicState};
 use super::off_thread;
 use crate::error::AppResult;
 use crate::services;
-use crate::services::music::BridgeStatus;
-
+use crate::services::music::{BridgeStatus, EnhanceStatus, KugouStatus};
 #[tauri::command]
 pub async fn music_poll() -> AppResult<MusicState> {
     off_thread(|| Ok(services::music::poll_state())).await
@@ -35,4 +34,28 @@ pub async fn music_lyrics(id: String) -> AppResult<Option<LyricsData>> {
 #[tauri::command]
 pub async fn music_bridge_status() -> AppResult<BridgeStatus> {
     off_thread(|| Ok(services::music::bridge_status())).await
+}
+
+/// 酷狗接入状态（设置页展示；增强模式下按补丁/进程状态给出下一步）
+#[tauri::command]
+pub async fn music_kugou_status() -> AppResult<KugouStatus> {
+    off_thread(|| Ok(services::music::kugou_status())).await
+}
+
+/// 酷狗增强的详细状态（设置页据此显示开关旁的状态与「重试增强」）
+#[tauri::command]
+pub async fn music_kugou_enhance_status() -> AppResult<EnhanceStatus> {
+    off_thread(|| Ok(services::music::kugou_enhance_status())).await
+}
+
+/// 打开「酷狗音乐」开关时自动调用：打补丁打开酷狗的 DevTools 端口（弹一次 UAC）
+#[tauri::command]
+pub async fn music_kugou_repair() -> AppResult<String> {
+    off_thread(services::music::kugou_repair).await
+}
+
+/// 关闭「酷狗音乐」开关时自动调用：提权还原酷狗的 libcef.dll（弹一次 UAC）
+#[tauri::command]
+pub async fn music_kugou_revert() -> AppResult<String> {
+    off_thread(services::music::kugou_revert).await
 }

@@ -7,7 +7,15 @@ import SettingSelect from './components/SettingSelect.vue';
 import ColorPicker from './components/ColorPicker.vue';
 import SettingSwitch from './components/SettingSwitch.vue';
 import appIcon from './assets/app-icon.png';
-import type { BridgeStatus, DisplayInfo, LangPref, ThemeId, UpdateCheckResult } from '../shared/ipc';
+import type {
+  BridgeStatus,
+  DisplayInfo,
+  KugouEnhanceStatus,
+  KugouStatus,
+  LangPref,
+  ThemeId,
+  UpdateCheckResult,
+} from '../shared/ipc';
 
 const { t, initI18n } = useI18n();
 /** 读直接渲染（reactive 自动追踪）；写也直接改字段，持久化/广播由 store 的 watch 统一处理 */
@@ -137,6 +145,121 @@ async function refreshBridgeStatus() {
   bridgeStatus.value = await api.musicBridgeStatus().catch(() => 'notDetected' as BridgeStatus);
 }
 
+const kugouStatus = ref<KugouStatus>('notDetected');
+const KUGOU_STATUS_KEY: Record<KugouStatus, string> = {
+  notDetected: 'kugouStatusNotDetected',
+  notRunning: 'kugouStatusNotRunning',
+  needsSystemControls: 'kugouStatusNeedsSystemControls',
+  needsPatch: 'kugouStatusNeedsPatch',
+  needsRestart: 'kugouStatusNeedsRestart',
+  connecting: 'kugouStatusConnecting',
+  connected: 'kugouStatusConnected',
+};
+const kugouStatusText = computed(() => t(KUGOU_STATUS_KEY[kugouStatus.value]));
+
+/** 音乐状态更新关着时拿不到媒体会话，状态只会误导人，索性不查（见模板里的 v-if） */
+async function refreshKugouStatus() {
+  if (!settings.music.kugouSupport || !settings.diagnostics.musicPoll) return;
+  kugouStatus.value = await api.musicKugouStatus().catch(() => 'notDetected' as KugouStatus);
+}
+
+/** 进程内增强：补丁状态与 CDP 连接情况（与接入由「酷狗音乐」一个开关联动） */
+const kugouEnhance = ref<KugouEnhanceStatus>({
+  patch: 'missing',
+  cdp: false,
+  kugouRunning: false,
+  needsRestart: false,
+});
+const kugouBusy = ref(false);
+const kugouMsg = ref('');
+
+async function refreshKugouEnhanceStatus() {
+  if (!settings.music.kugouEnhance || !settings.diagnostics.musicPoll) return;
+  kugouEnhance.value = await api.musicKugouEnhanceStatus().catch(() => kugouEnhance.value);
+}
+
+const kugouEnhanceText = computed(() => {
+  const s = kugouEnhance.value;
+  if (s.cdp) return t('kugouStatusConnected');
+  if (s.patch === 'unsupported') return t('kugouStatusUnsupported');
+  if (s.patch === 'pending') return t('kugouStatusNeedsPatch');
+  if (s.patch === 'missing') return t('kugouStatusNotDetected');
+  if (!s.kugouRunning) return t('kugouStatusNotRunning');
+  return s.needsRestart ? t('kugouStatusNeedsRestart') : t('kugouStatusConnecting');
+});
+
+/** 开关旁的状态：开着增强时按补丁/CDP 说得更细，退回纯接入时用系统媒体会话的状态 */
+const kugouStatusChip = computed(() =>
+  st.music.kugouEnhance ? kugouEnhanceText.value : kugouStatusText.value
+);
+
+/** 认得这个版本的酷狗、但补丁还没打上：自动那一次失败（拒了 UAC 等）后靠它重试 */
+const kugouCanRetry = computed(() => kugouEnhance.value.patch === 'pending');
+
+/** 一个开关管到底：开 = 接入 + 进程内增强（自动打一次补丁），关 = 停用并还原酷狗原文件 */
+async function toggleKugou(on: boolean) {
+  if (kugouBusy.value) return;
+  st.music.kugouSupport = on;
+  st.music.kugouEnhance = on;
+  kugouMsg.value = '';
+  if (!on) {
+    // 只有真打过补丁才谈得上还原（patch 认不出来时那份备份多半是旧版本的，别拿它盖回去）
+    const s = await api.musicKugouEnhanceStatus().catch(() => null);
+    if (s) kugouEnhance.value = s;
+    if (!s || s.patch !== 'patched') return;
+    if (await revertKugou()) return;
+    // 没还原成功（多半是拒了那次 UAC）：文件还是打过补丁的样子，开关退回「开」，再关一次就是重试
+    st.music.kugouSupport = true;
+    st.music.kugouEnhance = true;
+    void refreshKugouEnhanceStatus();
+    return;
+  }
+  const s = await api.musicKugouEnhanceStatus().catch(() => null);
+  if (s) kugouEnhance.value = s;
+  // 补丁已在位（或本机没装酷狗）：没什么要做的
+  if (!s || s.patch === 'patched' || s.patch === 'missing') return;
+  if (s.patch === 'unsupported') {
+    // 九处指纹对不上（酷狗换了 CEF 基线）：一个字节都不动，退回系统媒体会话
+    st.music.kugouEnhance = false;
+    kugouMsg.value = t('kugouUnsupportedFallback');
+    return;
+  }
+  await repairKugou();
+}
+
+async function repairKugou() {
+  if (kugouBusy.value) return;
+  kugouBusy.value = true;
+  kugouMsg.value = t('kugouRepairBusy');
+  try {
+    await api.musicKugouRepair();
+    kugouMsg.value = t('kugouRepairOk');
+  } catch (e) {
+    kugouMsg.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    kugouBusy.value = false;
+    await refreshKugouEnhanceStatus();
+  }
+}
+
+/** 还原酷狗原文件（要管理员写回 Program Files）。返回 false 表示没成功，原因已写进 kugouMsg */
+async function revertKugou(): Promise<boolean> {
+  if (kugouBusy.value) return false;
+  kugouBusy.value = true;
+  kugouMsg.value = t('kugouRevertBusy');
+  try {
+    await api.musicKugouRevert();
+    kugouMsg.value = t('kugouRevertOk');
+    return true;
+  } catch (e) {
+    kugouMsg.value = e instanceof Error ? e.message : String(e);
+    return false;
+  } finally {
+    kugouBusy.value = false;
+    await refreshKugouEnhanceStatus();
+  }
+}
+
 const wechatHasKey = ref(false);
 const wechatAcquiring = ref(false);
 const wechatMsg = ref('');
@@ -242,6 +365,8 @@ onBeforeUnmount(() => {
 onMounted(async () => {
   await initI18n();
   await initSettings();
+  // 接入与进程内增强合并成一个开关：老配置里只开了接入（或只开了增强）的，按接入对齐
+  st.music.kugouEnhance = st.music.kugouSupport;
   document.title = t('settingsTitle');
   window.addEventListener('blur', onWindowBlur);
   window.addEventListener('focus', onWindowFocus);
@@ -253,7 +378,12 @@ onMounted(async () => {
   api.onUpdateDownloaded((info) => applyUpdateResult({ status: 'downloaded', version: info.version }));
   applyUpdateResult(await api.getUpdateStatus().catch(() => ({ status: ver.packaged ? 'checking' : 'dev' })));
   void refreshBridgeStatus();
-  bridgeTimer = window.setInterval(() => void refreshBridgeStatus(), 2000);
+  void refreshKugouEnhanceStatus();
+  bridgeTimer = window.setInterval(() => {
+    void refreshBridgeStatus();
+    void refreshKugouStatus();
+    void refreshKugouEnhanceStatus();
+  }, 2000);
 });
 </script>
 
@@ -500,6 +630,30 @@ onMounted(async () => {
                   >{{ bridgeStatusText }}</span
                 >
               </SettingSwitch>
+              <SettingSwitch
+                :model-value="st.music.kugouSupport"
+                :label="t('musicKugouLabel')"
+                :description="t('settingsKugouHint')"
+                @update:model-value="toggleKugou"
+              >
+                <span
+                  v-if="st.music.kugouSupport && st.diagnostics.musicPoll"
+                  class="setting-status"
+                  :title="kugouStatusChip"
+                  role="status"
+                  >{{ kugouStatusChip }}</span
+                >
+                <button
+                  v-if="st.music.kugouSupport && st.diagnostics.musicPoll && kugouCanRetry"
+                  class="setting-action-btn"
+                  :disabled="kugouBusy"
+                  @click="repairKugou"
+                >
+                  <i v-if="kugouBusy" class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i>
+                  {{ kugouBusy ? t('kugouRepairBusyBtn') : t('kugouRetryBtn') }}
+                </button>
+              </SettingSwitch>
+              <p v-if="kugouMsg" class="setting-feedback" role="status">{{ kugouMsg }}</p>
             </div>
           </section>
         </template>

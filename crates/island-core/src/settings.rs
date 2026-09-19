@@ -119,11 +119,16 @@ pub struct NotificationsConfig {
 pub struct MusicConfig {
     /// 网易云进程内增强，默认开启
     pub netease_bridge: bool,
+    /// 酷狗音乐接入（系统媒体会话 + 酷狗接口补全歌词/封面/时长），默认开启
+    pub kugou_support: bool,
+    /// 酷狗进程内增强（给 libcef.dll 打补丁开 DevTools 端口，读毫秒级进度）。
+    /// 需要改酷狗自己的文件 + 一次管理员授权，所以默认关闭、由用户在设置里显式打开
+    pub kugou_enhance: bool,
 }
 
 impl Default for MusicConfig {
     fn default() -> Self {
-        Self { netease_bridge: true }
+        Self { netease_bridge: true, kugou_support: true, kugou_enhance: false }
     }
 }
 
@@ -145,5 +150,30 @@ impl AppSettings {
     /// store.json 里 settings 可能缺字段（老版本），逐字段 serde default 补齐
     pub fn from_value(value: serde_json::Value) -> Self {
         serde_json::from_value(value).unwrap_or_default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn music_config_fills_missing_fields_from_default() {
+        // 容器级 serde default 取的是 MusicConfig::default()，不是字段类型默认值：
+        // 老 store.json 里没有 kugouSupport，必须补成「默认开启」而不是被关掉
+        let s = AppSettings::from_value(serde_json::json!({
+            "theme": "dark",
+            "music": { "neteaseBridge": false }
+        }));
+        assert!(!s.music.netease_bridge, "已保存的开关要保留");
+        assert!(s.music.kugou_support, "缺字段时应默认开启酷狗接入");
+        assert!(!s.music.kugou_enhance, "进程内增强要动播放器的文件，缺字段时必须默认关闭");
+    }
+
+    #[test]
+    fn empty_settings_fall_back_to_defaults() {
+        let s = AppSettings::from_value(serde_json::json!({}));
+        assert!(s.music.netease_bridge && s.music.kugou_support);
+        assert!(!s.music.kugou_enhance);
     }
 }

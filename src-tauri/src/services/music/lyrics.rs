@@ -1,62 +1,11 @@
-//! 歌词获取：网易云 / QQ 音乐 API（阻塞 ureq，调用方已 off_thread）。
+//! 歌词获取：网易云 / QQ 音乐 / 酷狗 API（阻塞 ureq，调用方已 off_thread）。
 //! 移植自 electron/main/services/lyrics/*，含 LRC 解析与搜索相关性校验。
-
-use std::sync::OnceLock;
-use std::time::Duration;
 
 use island_core::{LyricLine, LyricsData};
 
 use super::b64;
+use super::net::{fetch_json, url_encode};
 use super::provider::TrackMeta;
-
-const UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36";
-const TIMEOUT: Duration = Duration::from_secs(8);
-
-/// 共享连接池，免得每个请求重做 TLS 握手
-fn agent() -> &'static ureq::Agent {
-    static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
-    AGENT.get_or_init(|| {
-        ureq::Agent::config_builder()
-            .timeout_global(Some(TIMEOUT))
-            .build()
-            .into()
-    })
-}
-
-fn fetch_json(url: &str, referer: Option<&str>) -> Option<serde_json::Value> {
-    let mut req = agent().get(url).header("User-Agent", UA);
-    if let Some(r) = referer {
-        req = req.header("Referer", r);
-    }
-    let mut resp = match req.call() {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("[music:lyrics] 请求失败 ({url}): {e}");
-            return None;
-        }
-    };
-    match resp.body_mut().read_json::<serde_json::Value>() {
-        Ok(v) => Some(v),
-        Err(e) => {
-            eprintln!("[music:lyrics] 响应不是 JSON ({url}): {e}");
-            None
-        }
-    }
-}
-
-/// encodeURIComponent 等价：保留 RFC 3986 非保留字符 + ! ~ * ' ( )
-fn url_encode(s: &str) -> String {
-    let mut out = String::new();
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'!' | b'~' | b'*' | b'\'' | b'(' | b')' => {
-                out.push(b as char)
-            }
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
-}
 
 fn norm_eq(a: &str, b: &str) -> bool {
     a.to_lowercase() == b.to_lowercase()
@@ -364,15 +313,45 @@ fn provider_qq_fetch(title: &str, artist: &str) -> Option<LyricsData> {
     }
 }
 
-/// 按标题/歌手搜索歌词：先网易云后 QQ；有歌词行即最优，
-/// 只有时长则记为兜底继续尝试下一个源
-pub fn fetch_lyrics(title: &str, artist: &str) -> Option<LyricsData> {
+/// 歌词源。酷狗曲目先问酷狗（同一个曲库，版本匹配率最高），其余源先网易云后 QQ。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Source {
+    Kugou,
+    Netease,
+    Qq,
+}
+
+impl Source {
+    fn fetch(self, title: &str, artist: &str) -> Option<LyricsData> {
+        match self {
+            Source::Kugou => super::kugou::provider_fetch(title, artist),
+            Source::Netease => provider_163_fetch(title, artist),
+            Source::Qq => provider_qq_fetch(title, artist),
+        }
+    }
+}
+
+/// 网易云 / QQ 的默认顺序
+const DEFAULT_SOURCES: &[Source] = &[Source::Netease, Source::Qq];
+/// 酷狗曲目：酷狗自己的歌词优先，取不到再退回默认顺序
+const KUGOU_SOURCES: &[Source] = &[Source::Kugou, Source::Netease, Source::Qq];
+
+pub fn sources_for(source_app_id: &str) -> &'static [Source] {
+    if super::kugou::is_source(source_app_id) {
+        KUGOU_SOURCES
+    } else {
+        DEFAULT_SOURCES
+    }
+}
+
+/// 按给定顺序搜索歌词：有歌词行即最优，只有时长则记为兜底继续尝试下一个源
+pub fn fetch_lyrics_with(title: &str, artist: &str, sources: &[Source]) -> Option<LyricsData> {
     if title.is_empty() {
         return None;
     }
     let mut best: Option<LyricsData> = None;
-    for fetch in [provider_163_fetch, provider_qq_fetch] {
-        let Some(r) = fetch(title, artist) else { continue };
+    for source in sources {
+        let Some(r) = source.fetch(title, artist) else { continue };
         if !r.lines.is_empty() {
             return Some(r);
         }
@@ -383,16 +362,14 @@ pub fn fetch_lyrics(title: &str, artist: &str) -> Option<LyricsData> {
     best
 }
 
+/// 按来源选歌词源顺序（酷狗曲目走酷狗接口）
+pub fn fetch_lyrics_for(source_app_id: &str, title: &str, artist: &str) -> Option<LyricsData> {
+    fetch_lyrics_with(title, artist, sources_for(source_app_id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn url_encode_keeps_unreserved_and_percent_encodes_utf8() {
-        assert_eq!(url_encode("a b"), "a%20b", "空格应编码为 %20");
-        assert_eq!(url_encode("歌"), "%E6%AD%8C", "中文应按 UTF-8 逐字节编码，错了搜索词会乱码");
-        assert_eq!(url_encode("a-b_c.!~*'()"), "a-b_c.!~*'()", "非保留字符不应编码");
-    }
 
     #[test]
     fn parse_lrc_extracts_time_and_text() {
@@ -436,5 +413,22 @@ mod tests {
         assert!(query_matches_song("晴天 周杰伦", "晴天"), "搜索词包含歌名应判定相关");
         assert!(query_matches_song("晴天(Live)", "晴天 (Live)"), "括号与空白差异不应影响判定");
         assert!(!query_matches_song("晴天", "雨天"), "词面无交集应判定无关，防止错误命中");
+    }
+
+    #[test]
+    fn kugou_tracks_ask_kugou_first_then_fall_back() {
+        let kugou = sources_for("KuGou.exe");
+        assert_eq!(kugou.first(), Some(&Source::Kugou), "酷狗曲目应先用酷狗自己的歌词");
+        assert!(kugou.contains(&Source::Netease) && kugou.contains(&Source::Qq), "酷狗找不到仍要退回网易云/QQ");
+        assert_eq!(
+            sources_for("cloudmusic.exe"),
+            &[Source::Netease, Source::Qq],
+            "其它播放器不受酷狗影响，顺序保持网易云后 QQ"
+        );
+    }
+
+    #[test]
+    fn empty_title_never_hits_any_source() {
+        assert!(fetch_lyrics_with("", "周杰伦", &[Source::Kugou]).is_none(), "空标题不该发起搜索");
     }
 }

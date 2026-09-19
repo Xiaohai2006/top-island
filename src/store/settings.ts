@@ -85,7 +85,7 @@ const DEFAULT_NOTIFICATIONS: NotificationsConfig = {
   wechat: false,
 };
 
-const DEFAULT_MUSIC: MusicConfig = { neteaseBridge: true };
+const DEFAULT_MUSIC: MusicConfig = { neteaseBridge: true, kugouSupport: true, kugouEnhance: false };
 
 /** 全部窗口共享的设置。组件读直接渲染字段（reactive 自动追踪），写也直接改字段——
  *  subscribe 统一负责持久化+广播+主题应用，加字段只需改默认值和类型 */
